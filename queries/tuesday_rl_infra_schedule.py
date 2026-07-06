@@ -1,19 +1,60 @@
 #!/usr/bin/env python3
-"""Build a Tuesday 'RL infrastructure' schedule from the Drbellamy/icml-2026 HF dataset.
+"""Build the candidate pool for a Tuesday 'RL infrastructure' reading track from
+the Drbellamy/icml-2026 HF dataset (papers config).
 
-Reads the `papers` config (papers.parquet). Filters to Tuesday, scores each paper
-for reinforcement-learning-infrastructure relevance over title+abstract, and emits
-a time-ordered markdown schedule.
+Two-stage pipeline:
+  1. THIS script scores every Tuesday paper for RL-infrastructure relevance over
+     title+abstract using hard systems/infra signals (distributed/async RL,
+     rollout & inference engines, training-inference consistency, throughput,
+     parallelism, ...) and writes candidates.json (~55 papers).
+  2. An LLM judge then reads the full abstracts and classifies each candidate as
+     CORE (RL systems/infra), ADJACENT (RL training efficiency/stability/scaling),
+     or NOT. render_schedule.py turns CORE+ADJACENT into the final schedule.
 
-Run once huggingface.co is allowlisted:
-    python build_tue_rl_infra.py
-Or against a local file:
-    python build_tue_rl_infra.py /path/to/papers.parquet
+Regex alone can't cleanly separate "infra for RL" from "RL applied to a task"
+(the word "framework" appears in nearly every abstract), so stage 2 is the judge.
+The committed queries/tuesday_rl_infra_schedule.md is that curated output.
+
+Run (needs huggingface.co allowlisted, or pass a local parquet):
+    python queries/tuesday_rl_infra_schedule.py [papers.parquet]
 """
-import sys, os, re, subprocess
+import sys, os, re, json, subprocess
 
 URL = "https://huggingface.co/datasets/Drbellamy/icml-2026/resolve/main/data/papers.parquet"
 LOCAL = "papers.parquet"
+
+RL = [r'reinforcement learning', r'\brl\b', r'\brlhf\b', r'\brlvr\b', r'\bppo\b', r'\bgrpo\b',
+      r'policy optimization', r'policy gradient', r'actor[- ]critic', r'reward model', r'\brollout',
+      r'post[- ]?training', r'off[- ]policy', r'on[- ]policy', r'experience replay']
+# HARD systems/infra signals only (deliberately excludes generic "framework/system/scaling").
+INFRA = [r'distributed', r'asynchron', r'\basync', r'throughput', r'\bgpu', r'\bcluster', r'parallelism',
+         r'tensor parallel', r'data parallel', r'pipeline parallel', r'\bfsdp\b', r'megatron', r'\bvllm\b', r'\bsglang\b',
+         r'rollout (engine|generation|worker|system|schedul)', r'inference (engine|server|system)', r'serving',
+         r'weight (sync|synchroniz|reshard|transfer|update)', r'training[- ]inference', r'inference[- ]training',
+         r'replay buffer', r'actor[- ]learner', r'load balanc', r'\bscheduler\b', r'scheduling',
+         r'memory[- ]efficient', r'kv[- ]?cache', r'checkpoint', r'elastic', r'fault[- ]toleran', r'colocat',
+         r'disaggregat', r'wall[- ]clock', r'utiliz', r'latency', r'\bhardware', r'\bsystem-level', r'compute[- ]efficien']
+STRONG = [r'rl (framework|system|library|infrastructure|platform|engine|stack)',
+          r'reinforcement learning (system|framework|library|infrastructure|platform|engine|pipeline|stack)',
+          r'(distributed|scalable|asynchronous|async) (reinforcement learning|rl)\b',
+          r'rlhf (system|framework|infrastructure|pipeline|engine)',
+          r'\bverl\b|openrlhf|\btrlx\b|nemo[- ]?aligner|\bareal\b|\bslime\b|\brllib\b',
+          r'rollout (engine|generation)', r'training[- ]inference (mismatch|gap|consisten)']
+RLr = [re.compile(x, re.I) for x in RL]
+INr = [re.compile(x, re.I) for x in INFRA]
+STr = [re.compile(x, re.I) for x in STRONG]
+
+
+def score(title, abstract):
+    txt = f"{title or ''}  {abstract or ''}"
+    strong = sum(1 for r in STr if r.search(txt))
+    rl = sum(1 for r in RLr if r.search(txt))
+    infra = sum(1 for r in INr if r.search(txt))
+    rl_t = any(r.search(title or '') for r in RLr)
+    infra_t = any(r.search(title or '') for r in INr)
+    rel = strong > 0 or (rl > 0 and infra >= 2) or (rl_t and infra_t)
+    s = strong * 8 + (3 if (rl_t and infra_t) else 0) + rl + infra
+    return rel, s
 
 
 def load_df():
@@ -22,96 +63,30 @@ def load_df():
     if src and os.path.exists(src):
         return pd.read_parquet(src)
     if not os.path.exists(LOCAL):
-        # curl is proxy-aware in this environment; urllib is not.
         r = subprocess.run(["curl", "-sS", "-L", "-o", LOCAL, URL], capture_output=True, text=True)
         if r.returncode != 0 or not os.path.exists(LOCAL) or os.path.getsize(LOCAL) < 1000:
-            sys.exit(f"Download failed (host likely still blocked): {r.stderr[:400]}")
+            sys.exit(f"Download failed (huggingface.co likely not allowlisted): {r.stderr[:400]}")
     return pd.read_parquet(LOCAL)
 
 
-# --- RL-infrastructure relevance ---------------------------------------------
-RL_TERMS = [
-    r"reinforcement learning", r"\brl\b", r"\brlhf\b", r"\brlvr\b", r"\bppo\b",
-    r"policy optimization", r"policy gradient", r"actor[- ]critic", r"q[- ]learning",
-    r"markov decision", r"\bmdp\b", r"bandit", r"agentic", r"\bagent\b",
-    r"reward model", r"self[- ]play", r"grpo", r"dpo\b",
-]
-INFRA_TERMS = [
-    r"infrastructure", r"framework", r"library", r"toolkit", r"platform", r"system",
-    r"distributed", r"scalab", r"scaling", r"parallel", r"throughput", r"pipeline",
-    r"rollout", r"sampler", r"simulat", r"environment suite", r"benchmark suite",
-    r"engine", r"serving", r"inference", r"training system", r"gpu", r"cluster",
-    r"asynchronous", r"actor[- ]learner", r"replay buffer", r"vectorized",
-    r"orchestrat", r"deployment", r"efficient training", r"open[- ]source",
-]
-# Strong standalone signals — count as a hit on their own.
-STRONG = [
-    r"rl infrastructure", r"rl framework", r"rl system", r"rl library",
-    r"reinforcement learning (system|framework|library|infrastructure|platform)",
-    r"distributed (reinforcement learning|rl)", r"scalable (reinforcement learning|rl)",
-    r"(training|inference) (system|framework|infrastructure) for (rl|reinforcement)",
-    r"rlhf (system|framework|infrastructure|pipeline)", r"veRL|verl|openrlhf|trl\b|trlx",
-    r"rollout (engine|system|generation)", r"async(hronous)? rl",
-]
-RL_RE = [re.compile(t, re.I) for t in RL_TERMS]
-INFRA_RE = [re.compile(t, re.I) for t in INFRA_TERMS]
-STRONG_RE = [re.compile(t, re.I) for t in STRONG]
-
-
-def score(title, abstract):
-    text = f"{title or ''}  {abstract or ''}"
-    strong = sum(1 for r in STRONG_RE if r.search(text))
-    rl = sum(1 for r in RL_RE if r.search(text))
-    infra = sum(1 for r in INFRA_RE if r.search(text))
-    rl_in_title = any(r.search(title or "") for r in RL_RE)
-    # relevant if: any strong signal, OR (has RL term AND infra term)
-    relevant = strong > 0 or (rl > 0 and infra > 0)
-    s = strong * 5 + (rl and infra) * 2 + rl + infra + (2 if rl_in_title else 0)
-    return relevant, s
-
-
 def main():
-    import pandas as pd
     df = load_df()
     tue = df[df["day"].astype(str).str.lower() == "tuesday"].copy()
-    print(f"[info] total papers={len(df)}  tuesday={len(tue)}", file=sys.stderr)
-
-    rows = []
+    cands = []
     for _, p in tue.iterrows():
         rel, s = score(p.get("title"), p.get("abstract"))
         if rel:
-            rows.append((s, p))
-    rows.sort(key=lambda x: (str(x[1].get("session_start_kst") or ""), -x[0]))
-    print(f"[info] rl-infra matches on tuesday={len(rows)}", file=sys.stderr)
-
-    def fmt_time(v):
-        v = str(v or "")
-        return v[11:16] if len(v) >= 16 else "TBD"
-
-    lines = ["# ICML 2026 — Tuesday: RL Infrastructure track (unofficial)", ""]
-    lines.append(f"_{len(rows)} papers matched on Tuesday. Times in KST (conference local)._\n")
-    for s, p in rows:
-        t0 = fmt_time(p.get("session_start_kst"))
-        t1 = fmt_time(p.get("session_end_kst"))
-        loc = p.get("location") or "TBD"
-        typ = p.get("paper_type") or ""
-        auth = p.get("authors")
-        if hasattr(auth, "__len__") and not isinstance(auth, str):
-            auth = ", ".join(list(auth)[:4]) + ("…" if len(auth) > 4 else "")
-        lines.append(f"### {t0}–{t1} · {loc} · {typ}")
-        lines.append(f"**{p.get('title')}**  ")
-        lines.append(f"{auth}  ")
-        sess = p.get("session") or p.get("workshop")
-        if sess:
-            lines.append(f"_{sess}_  ")
-        url = p.get("url")
-        if url:
-            lines.append(f"[details]({url})")
-        lines.append("")
-    out = "\n".join(lines)
-    with open("tuesday_rl_infra_schedule.md", "w") as f:
-        f.write(out)
-    print(out)
+            cands.append({
+                "score": int(s), "title": p["title"], "abstract": (p.get("abstract") or "")[:1200],
+                "authors": list(p["authors"])[:6] if p.get("authors") is not None else [],
+                "start": str(p.get("session_start_kst")), "end": str(p.get("session_end_kst")),
+                "location": p.get("location"), "paper_type": p.get("paper_type"), "url": p.get("url"),
+            })
+    cands.sort(key=lambda x: -x["score"])
+    json.dump(cands, open("candidates.json", "w"), indent=1, default=str)
+    print(f"tuesday papers={len(tue)}  candidates={len(cands)} -> candidates.json", file=sys.stderr)
+    print("next: LLM-classify candidates.json (CORE/ADJACENT/NOT) -> classification.json, "
+          "then: python queries/render_schedule.py", file=sys.stderr)
 
 
 if __name__ == "__main__":
