@@ -1,0 +1,6 @@
+openreview-py>=1.40
+pandas>=2.0
+pyarrow>=14.0
+huggingface_hub>=0.20
+tiktoken>=0.5
+# firecrawl CLI (optional, for the initial calendar scrape): https://docs.firecrawl.dev
