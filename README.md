@@ -2,7 +2,7 @@
 
 Scrape an entire ML conference into a clean, agent-queryable dataset — then explore it from your phone with one line.
 
-This is the exact pipeline behind the **[drbellamy/icml-2026](https://huggingface.co/datasets/drbellamy/icml-2026)** HuggingFace dataset: **10,815 papers** (5,872 main-conference + 4,943 workshop) with titles, abstracts, authors, **session times, rooms, and PDF links**, plus every tutorial, invited talk, and workshop.
+This is the exact pipeline behind the **[Drbellamy/icml-2026](https://huggingface.co/datasets/Drbellamy/icml-2026)** HuggingFace dataset: **10,815 papers** (5,872 main-conference + 4,943 workshop) with titles, abstracts, authors, **session times, rooms, and PDF links**, plus every tutorial, invited talk, and workshop.
 
 > **The pattern:** *any conference's virtual site + OpenReview + an agent = a queryable conference in your pocket.* This repo is the ICML 2026 instance; the approach generalizes to any Whova/OpenReview-style conference.
 
