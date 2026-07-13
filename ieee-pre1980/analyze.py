@@ -51,11 +51,14 @@ def main():
         .sort_index()
     )
 
-    # Crossover: first year where digital overtakes analog and stays ahead next year too.
+    # Sustained crossover: earliest year from which digital exceeds analog for
+    # every remaining year. Ignores the noisy single-year blips in the sparse
+    # early data (e.g. 1948) and reports the permanent inflection instead.
     crossover = None
     years = by_year.index.tolist()
     for i, y in enumerate(years):
-        if by_year.loc[y, "digital"] > by_year.loc[y, "analog"]:
+        rest = by_year.iloc[i:]
+        if (rest["digital"] > rest["analog"]).all():
             crossover = int(y)
             break
 
@@ -65,7 +68,7 @@ def main():
     if crossover is not None:
         ax.axvline(crossover, color="#555", ls="--", lw=1)
         ax.annotate(
-            f"crossover: {crossover}",
+            f"digital permanently\nleads from {crossover}",
             xy=(crossover, ax.get_ylim()[1] * 0.9),
             xytext=(6, 0), textcoords="offset points", fontsize=11, color="#555",
         )
@@ -84,7 +87,7 @@ def main():
 - Records analyzed: **{len(df):,}** (OpenAlex, IEEE publisher lineage P4310319808, year < 1980)
 - Titles containing "analog": **{total_analog:,}**
 - Titles containing "digital": **{total_digital:,}**
-- **Crossover year (digital first exceeds analog): {crossover}**
+- **Crossover year (digital permanently exceeds analog from here on): {crossover}**
 
 Chart: `analog_vs_digital.png` · Dataset: `ieee_pre1980.parquet` / `.csv`
 """
