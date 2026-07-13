@@ -22,8 +22,8 @@ def main():
 
     df = pd.read_parquet(os.path.join(HERE, "ieee_pre1980.parquet"))
     ds = Dataset.from_pandas(df, preserve_index=False)
-    ds.push_to_hub(REPO)
-    print(f"Pushed {len(df):,} rows to https://huggingface.co/datasets/{REPO}")
+    ds.push_to_hub(REPO, private=True)
+    print(f"Pushed {len(df):,} rows (private) to https://huggingface.co/datasets/{REPO}")
 
 
 if __name__ == "__main__":
