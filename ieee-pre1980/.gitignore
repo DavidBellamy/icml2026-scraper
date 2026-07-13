@@ -1,0 +1,6 @@
+# Generated data — regenerate with fetch_openalex.py / analyze.py
+works.jsonl
+progress.json
+fetch.log
+ieee_pre1980.parquet
+ieee_pre1980.csv
