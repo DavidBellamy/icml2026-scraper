@@ -17,6 +17,18 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 JSONL = os.path.join(HERE, "works.jsonl")
 
 
+def reconstruct_abstract(inv):
+    """Rebuild plain-text abstract from OpenAlex's abstract_inverted_index."""
+    if not isinstance(inv, dict) or not inv:
+        return None
+    positions = []
+    for word, idxs in inv.items():
+        for i in idxs:
+            positions.append((i, word))
+    positions.sort()
+    return " ".join(w for _, w in positions)
+
+
 def load():
     rows = []
     with open(JSONL) as f:
@@ -25,11 +37,20 @@ def load():
             if line:
                 rows.append(json.loads(line))
     df = pd.DataFrame(rows)
-    # Flatten concepts to a compact string so the table stays agent-friendly.
-    if "concepts" in df.columns:
-        df["concepts"] = df["concepts"].apply(
-            lambda cs: "; ".join(c["display_name"] for c in cs) if isinstance(cs, list) else ""
-        )
+
+    # Reconstruct the abstract to readable text, then drop the bulky raw index.
+    if "abstract_inverted_index" in df.columns:
+        df["abstract"] = df["abstract_inverted_index"].apply(reconstruct_abstract)
+        df = df.drop(columns=["abstract_inverted_index"])
+
+    # Every remaining nested field (authorships, concepts, topics, locations, ...)
+    # is JSON-encoded so the full record survives into flat parquet/CSV with no
+    # loss. Scalars pass through untouched.
+    for col in df.columns:
+        if df[col].apply(lambda v: isinstance(v, (list, dict))).any():
+            df[col] = df[col].apply(
+                lambda v: json.dumps(v, ensure_ascii=False) if isinstance(v, (list, dict)) else v
+            )
     return df
 
 

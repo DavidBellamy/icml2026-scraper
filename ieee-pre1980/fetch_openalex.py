@@ -16,7 +16,8 @@ PROGRESS = os.path.join(HERE, "progress.json")
 
 PARAMS = {
     "filter": "primary_location.source.publisher_lineage:P4310319808,publication_year:<1980",
-    "select": "title,publication_year,concepts",
+    # No "select": omitting it returns the full work object (every field OpenAlex
+    # exposes — abstracts, authorships, citations, topics, locations, ...).
     "per-page": 200,
     "mailto": "bellamyrd@gmail.com",
 }
